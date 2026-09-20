@@ -71,7 +71,23 @@ export async function startOrResumeDailySession(playerId: string, difficultyTier
   });
 
   if (existingSession) {
-    return getSessionPublicState(existingSession.id, playerId);
+    // Verify session rounds point to valid active songs with lyrics
+    const sessionRounds = await db.query.rounds.findMany({
+      where: eq(rounds.gameSessionId, existingSession.id),
+    });
+    const roundSongIds = sessionRounds.map((r) => r.songId);
+    const validSongs = await db.query.songs.findMany({
+      where: and(inArray(songs.id, roundSongIds), eq(songs.status, 'active'), eq(songs.hasLyrics, 1)),
+    });
+
+    if (validSongs.length === sessionRounds.length && sessionRounds.length === 5) {
+      return getSessionPublicState(existingSession.id, playerId);
+    }
+
+    // Invalid/stale session with non-lyrical or deleted tracks — purge and regenerate
+    await db.delete(roundAttempts).where(inArray(roundAttempts.roundId, sessionRounds.map((r) => r.id)));
+    await db.delete(rounds).where(eq(rounds.gameSessionId, existingSession.id));
+    await db.delete(gameSessions).where(eq(gameSessions.id, existingSession.id));
   }
 
   // Get daily puzzle items
@@ -80,12 +96,52 @@ export async function startOrResumeDailySession(playerId: string, difficultyTier
     orderBy: [dailyPuzzleItems.position],
   });
 
-  if (items.length === 0) {
-    // If today's items haven't been generated, select 5 active songs with verified lyrics
+  // Verify that all items in this daily puzzle are active songs with lyrics
+  let isValidPuzzle = items.length === 5;
+  if (isValidPuzzle) {
+    const puzzleSongIds = items.map((i) => i.songId);
+    const activeLyricSongs = await db.query.songs.findMany({
+      where: and(inArray(songs.id, puzzleSongIds), eq(songs.status, 'active'), eq(songs.hasLyrics, 1)),
+    });
+    if (activeLyricSongs.length !== 5) {
+      isValidPuzzle = false;
+    }
+  }
+
+  if (!isValidPuzzle) {
+    // Delete any old/invalid puzzle items
+    await db.delete(dailyPuzzleItems).where(eq(dailyPuzzleItems.dailyPuzzleId, puzzleId));
+
+    // Ensure daily_puzzles record exists
+    await db
+      .insert(dailyPuzzles)
+      .values({
+        id: puzzleId,
+        puzzleDate: todayUtc,
+        status: 'approved',
+        publishedAt: Date.now(),
+      })
+      .onConflictDoNothing();
+
+    // Select 5 active songs with verified lyrics deterministically per day
     const allSongs = await db.query.songs.findMany({
       where: and(eq(songs.status, 'active'), eq(songs.hasLyrics, 1)),
+      orderBy: [songs.id],
     });
-    const selected = allSongs.slice(0, 5);
+
+    if (allSongs.length < 5) {
+      throw new Error('Not enough active lyrical songs available');
+    }
+
+    // Deterministic pseudo-random rotation based on date hash
+    const dateNum = todayUtc.split('-').reduce((acc, part) => acc * 31 + parseInt(part, 10), 0);
+    const shuffled = [...allSongs].sort((a, b) => {
+      const hashA = (a.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) + dateNum) % 1000;
+      const hashB = (b.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) + dateNum) % 1000;
+      return hashA - hashB;
+    });
+
+    const selected = shuffled.slice(0, 5);
     items = [];
     for (let i = 0; i < selected.length; i++) {
       const s = selected[i];
@@ -97,7 +153,7 @@ export async function startOrResumeDailySession(playerId: string, difficultyTier
         clipId: `clip-${s.id}`,
         difficultyTier: s.difficultyTier,
       };
-      await db.insert(dailyPuzzleItems).values(item).onConflictDoNothing();
+      await db.insert(dailyPuzzleItems).values(item);
       items.push(item);
     }
   }

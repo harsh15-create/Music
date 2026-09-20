@@ -73,18 +73,21 @@ async function runE2E() {
   assert(guessRes.data.data.round.correctAnswer !== null, 'Correct answer revealed after resolution');
   console.log('  ✓ Round 1 solved in 1 attempt! Score: 10 pts (5 base * 2x multiplier)');
 
-  // 5. Skip Round 2
-  console.log('5. Submitting skip for Round 2...');
+  // 5. Skip Round 2 through 5 opportunities
+  console.log('5. Submitting progressive skips for Round 2...');
   const round2 = session.rounds[1];
-  const skipRes = await req(`/api/v1/rounds/${round2.id}/attempts`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isSkip: true }),
-  });
-  assert.strictEqual(skipRes.status, 200);
-  assert.strictEqual(skipRes.data.data.round.state, 'skipped');
-  assert.strictEqual(skipRes.data.data.round.score, 0);
-  console.log('  ✓ Round 2 skipped successfully. Score: 0 pts');
+  let finalSkipRes = null;
+  for (let i = 1; i <= 5; i++) {
+    finalSkipRes = await req(`/api/v1/rounds/${round2.id}/attempts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isSkip: true }),
+    });
+    assert.strictEqual(finalSkipRes.status, 200);
+  }
+  assert.strictEqual(finalSkipRes.data.data.round.state, 'skipped');
+  assert.strictEqual(finalSkipRes.data.data.round.score, 0);
+  console.log('  ✓ Round 2 progressively skipped to exhaustion. Score: 0 pts');
 
   // 6. Test spoiler-safe share generation
   console.log('6. Generating spoiler-safe share card...');

@@ -6,9 +6,9 @@ import { normalizeText } from '../lib/game/normalizer';
 export async function seedDatabase() {
   await initDb();
 
-  // 1. Seed Songs, Clips, and Aliases
+  // 1. Seed Songs, Clips, and Aliases (Synthetic / CC tracks disabled in favor of verified lyrical hits)
   for (const track of manifest.tracks) {
-    // Insert or ignore song
+    // Insert or ignore song with status disabled and hasLyrics 0
     await db
       .insert(songs)
       .values({
@@ -18,7 +18,8 @@ export async function seedDatabase() {
         genre: track.genre,
         subgenre: track.subgenre,
         difficultyTier: track.difficulty_tier,
-        status: 'active',
+        status: 'disabled',
+        hasLyrics: 0,
         metadataVersion: 1,
       })
       .onConflictDoNothing();
@@ -62,7 +63,7 @@ export async function seedDatabase() {
     }
   }
 
-  // 2. Seed Daily Puzzles for UTC today and past/future dates
+  // 2. Ensure Daily Puzzle table exists (daily items are dynamically generated from active lyrical hits)
   const todayUtc = new Date().toISOString().split('T')[0];
   const puzzleId = `daily-${todayUtc}`;
 
@@ -75,29 +76,6 @@ export async function seedDatabase() {
       publishedAt: Date.now(),
     })
     .onConflictDoNothing();
-
-  // Daily puzzle has 5 curated songs in specific order
-  const dailySelection = [
-    { pos: 1, songId: 'song-01', tier: 'Easy' },
-    { pos: 2, songId: 'song-02', tier: 'Easy' },
-    { pos: 3, songId: 'song-03', tier: 'Medium' },
-    { pos: 4, songId: 'song-06', tier: 'Medium' },
-    { pos: 5, songId: 'song-07', tier: 'Hard' },
-  ];
-
-  for (const item of dailySelection) {
-    await db
-      .insert(dailyPuzzleItems)
-      .values({
-        id: `dpi-${puzzleId}-${item.pos}`,
-        dailyPuzzleId: puzzleId,
-        position: item.pos,
-        songId: item.songId,
-        clipId: `clip-${item.songId}`,
-        difficultyTier: item.tier,
-      })
-      .onConflictDoNothing();
-  }
 
   // 3. Seed some opted-in leaderboard users & sessions for realism
   const sampleUsers = [
